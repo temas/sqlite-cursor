@@ -70,6 +70,10 @@ ModelCursor.prototype.each = function(cbEach, cbDone) {
 	}
 	//console.dir(this);
 	var ev = new events.EventEmitter();
+    if (_debug) {
+        var E = new Error();
+        console.log("[DEBUG] Query stack:"+ E.stack);
+    }
 	primaryDB.query(query.format, query.bindings, function(err, row) {
 		if (err) {
 			ev.emit("error", err);
@@ -156,10 +160,11 @@ ModelCursor.prototype._basicQuery = function(query, cbDone) {
 	var ev = new events.EventEmitter();
 	primaryDB.execute(query.format, query.bindings, function(err, rows) {
 		if (err) {
+            if (_debug) console.error("[DEBUG] Error: " + err);
 			ev.emit("error", err);
 			return;
 		}
-		cbDone();
+		if (cbDone) cbDone();
 	});
 	return ev;
 };
@@ -168,7 +173,7 @@ ModelCursor.prototype._buildQuery = function(query) {
     if (this._joins) this._joins.forEach(function(join) { join.func.build(query, join.alias); });
     
 	// The where clause
-    if (this._query) query.format += " WHERE ";
+    if (this._query && Object.keys(this._query).length > 0) query.format += " WHERE ";
 	var where = isFunction(this._query) ? this.query.build(query) : Ops.and(this._query).build(query);
 	if (this._sort) {
 		query.format += " ORDER BY ";
@@ -204,7 +209,9 @@ var Model = function(name, spec) {
 		for (var k in fields) {
 			if (fields.hasOwnProperty(k) && self.spec.hasOwnProperty(k)) {
 				this._dirtyFields[k] = fields[k];
-			}
+			} else {
+                if (_debug) console.log("[DEBUG] Unknown update field: " + k);
+            }
 		}
 	};
 	this.ModelEntry.prototype.remove = function(cbDone) {
@@ -235,7 +242,15 @@ var Model = function(name, spec) {
 				})
 			})
 		});
-	}
+	};
+    this.ModelEntry.prototype.toJSON = function() {
+        var simpleObject = {};
+        var self = this;
+        Object.keys(this.model.spec).forEach(function(k) {
+            if (self.row.hasOwnProperty(k)) simpleObject[k] = self.row[k];
+        });
+        return simpleObject;
+    };
 	function addBasicProp(key) {
 		Object.defineProperty(self.ModelEntry.prototype, key, {
 			get:function() {
@@ -268,8 +283,8 @@ var Model = function(name, spec) {
 		// This is getting gnarly
 		if (spec[k].hasOwnProperty("join")) {
 			this.joins.push({alias:k, func:spec[k].type});
-		} else if (spec[k].hasOwnProperty("type")) {
-			addCallableProp(k);
+		} else if (spec[k].type && isFunction(spec[k].type)) {
+            addCallableProp(k);
 		} else {
 			addBasicProp(k);
 		}
@@ -291,6 +306,11 @@ Model.prototype.find = function(expressions) {
 	var cursor = new ModelCursor(this);
 	cursor.query(expressions);
 	return cursor;
+};
+Model.prototype.update = function(entry, cbDone) {
+    var cursor = new ModelCursor(this);
+    cursor.update(entry, cbDone);
+    return cursor;
 };
 Model.prototype.new = function() {
 	var ret = new this.ModelEntry();
@@ -343,7 +363,7 @@ Model.prototype.create = function(cbDone) {
 			return "'" + entry.name + "' " + entry.type + (entry.primaryKey ? " PRIMARY KEY" : "") + (entry.autoIncrement ? " AUTOINCREMENT" : "");
 		}).join(",");
 		sql += ")";
-		if (_debug) console.log(sql);
+		if (_debug) process.stderr.write(sql + "\n");
 		primaryDB.execute(sql, function(err, rows) {
 			if (cbDone) cbDone(err);
 		})
@@ -380,7 +400,7 @@ BooleanOp.prototype.build = function(query) {
 		var expression = this.expressions[x];
 		if (isFunction(expression.build)) {
 			query.format += x;
-			expression.build.call(this, query);
+			expression.build.call(this.expressions[x], query);
 		} else {
             if (x.indexOf(".") < 0) x = query.rootTable + "." + x;
 			query.format += x + " = ?";
@@ -389,6 +409,14 @@ BooleanOp.prototype.build = function(query) {
 		hasFirst = true;
 	}
 }
+function InOp(values) {
+    this.values = values;
+}
+InOp.prototype.build = function(query) {
+    query.format += " IN (" + Array(this.values.length).join("?,").slice(0, -1) + ")";
+    query.bindings = query.bindings.concat(this.values);
+};
+
 Ops = {
 	gt:function(value) {
 		return new ComparisonOp(">", value);
@@ -410,7 +438,10 @@ Ops = {
 	},
 	and:function(expressions) {
 		return new BooleanOp("AND", expressions);
-	}
+	},
+    in:function(values) {
+        return new InOp(values);
+    }
 };
 exports.Ops = Ops;
 
