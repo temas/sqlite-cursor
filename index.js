@@ -1,5 +1,5 @@
 var util = require("util");
-var sqlite = require("sqlite");
+var sqlite = require("sqlite-fts");
 var events = require("events");
 var async = require("async");
 var _debug = true;

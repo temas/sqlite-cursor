@@ -12,6 +12,6 @@
   },
   "dependencies": {
     "async": ">=0.1.9",
-    "sqlite": ">=1.0.4"
+    "sqlite-fts": ">=0.0.5"
   }
 }
